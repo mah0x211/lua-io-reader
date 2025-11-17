@@ -52,6 +52,12 @@ function Reader:init(fd, f, sec)
     return self
 end
 
+--- size
+--- @return integer size
+function Reader:size()
+    return #self.buf
+end
+
 --- getfd
 --- @return integer fd
 function Reader:getfd()
