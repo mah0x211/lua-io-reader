@@ -70,7 +70,7 @@ print(dump({
 
 ## fd = reader:getfd()
 
-get the file descriptor of the reader.
+get the file descriptor of the reader. if the reader is closed, returns negative value.
 
 **Returns**
 
@@ -96,16 +96,14 @@ close the reader.
 - `err:any`: error message.
 
 
-## s, err, timeout = reader:read( [fmt] )
+## s, err, timeout = reader:readn( n )
 
-read data from the file or file descriptor.
+read `n` bytes from the reader.
 
 **Parameters**
 
-- `fmt:integer|string`: size of data to read, or format string as follows: (`*` prefix can be omitted)
-  - `*l`: reads a line. (default)
-  - `*L`: reads a line with the newline character.
-  - `*a`: reads all data.
+- `n:integer`: number of bytes to read.  
+    `n` must be greater than or equal to `0`. if `n` is `0`, returns an empty string.
 
 **Returns**
 
@@ -114,9 +112,49 @@ read data from the file or file descriptor.
 - `timeout:boolean`: `true` if timed out.
 
 
+## s, err, timeout = reader:readall()
+
+read all data from the reader.
+
+**Returns**
+
+- `s:string`: read data.
+- `err:any`: error message.
+- `timeout:boolean`: `true` if timed out.
+
+
+## s, err, timeout = reader:readline( [with_newline] )
+
+read a line from the reader.
+
+**Parameters**
+
+- `with_newline:boolean`: if `true`, includes the newline character in the returned line. (default: `false`)
+
+**Returns**
+
+- `s:string`: read line.
+- `err:any`: error message.
+- `timeout:boolean`: `true` if timed out.
+
+
+## s, err, timeout = reader:read( [fmt] )
+
+read data from the reader.
+ 
+The optional `fmt` parameter controls how data is read.
+If omitted, the default is `*l` (read one line without the newline).
+
+- When `fmt` is an integer, the call is equivalent to `reader:readn(fmt)`.
+- When it is a string, the following formats are recognized (the `*` prefix may be omitted):
+    - `*l`: equivalent to `reader:readline()` (without the newline).
+    - `*L`: equivalent to `reader:readline(true)` (with the newline).
+    - `*a`: equivalent to `reader:readall()`.
+
+
 ## iter = reader:lines()
 
-returns an iterator that reads a line from the file or file descriptor.
+returns an iterator that reads a line from the reader.
 
 **Returns**
 
