@@ -72,7 +72,7 @@ function Reader:close()
     local f = self.file
     if f then
         self.file = nil
-        self.fd = -self.fd
+        self.fd = self.fd == 0 and -1 or -self.fd
         return f:close()
     end
     return true
