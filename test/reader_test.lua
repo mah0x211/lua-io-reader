@@ -221,6 +221,40 @@ function testcase.lines()
     assert.equal(lines, {})
 end
 
+function testcase.lines_error_handling()
+    local f = assert(io.tmpfile())
+    local r = assert(reader.new(f))
+    f:write('test line\n')
+    f:seek('set')
+
+    -- test that lines() throws error when reader is closed
+    r:close()
+    local iter = r:lines()
+    local err = assert.throws(iter)
+    assert.match(err, 'EBADF')
+end
+
+function testcase.lines_iteration_error()
+    local f = assert(io.tmpfile())
+    local r = assert(reader.new(f))
+    f:write('first line\n')
+    f:seek('set')
+
+    -- test that lines() throws error during iteration when reader becomes closed
+    local iter = r:lines()
+
+    -- Read first line successfully
+    local line = iter()
+    assert.equal(line, 'first line')
+
+    -- Close reader before next iteration
+    r:close()
+
+    -- Next iteration should throw an error
+    local err = assert.throws(iter)
+    assert.match(err, 'EBADF')
+end
+
 function testcase.close()
     local f = assert(io.tmpfile())
     local r = assert(reader.new(f))

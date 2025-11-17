@@ -245,10 +245,9 @@ end
 --- @return function
 function Reader:lines()
     return function()
-        local line = self:read('*l')
-        if not line and self.buf ~= '' then
-            line = self.buf
-            self.buf = ''
+        local line, err = self:readline()
+        if err then
+            error(err)
         end
         return line
     end
