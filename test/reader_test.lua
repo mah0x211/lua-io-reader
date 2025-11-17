@@ -472,3 +472,31 @@ function testcase.readn_after_wait_success()
     pr:close()
 end
 
+function testcase.size()
+    local f = assert(io.tmpfile())
+    local r = assert(reader.new(f))
+
+    -- test that size returns 0 for empty buffer
+    assert.equal(r:size(), 0)
+
+    -- Write data with multiple lines to test readline buffering
+    local content = 'line1\nline2\nline3'
+    f:write(content)
+    f:seek('set')
+
+    -- Read first line - this will read "line1\n" and leave remaining in buffer
+    local line = r:readline(true)
+    assert.equal(line, 'line1\n')
+    content = content:sub(#line + 1)
+
+    -- Buffer should contain the remaining data
+    assert.equal(r:size(), #content)
+
+    -- Read all remaining to verify buffer contents and empty buffer
+    local data = r:readall()
+    -- Buffer should be empty after reading all
+    assert.equal(r:size(), 0)
+    -- Remaining data should contain "line2\nline3" and possibly the newline from the first line
+    assert.equal(#data, #content)
+end
+
