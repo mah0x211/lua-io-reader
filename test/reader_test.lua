@@ -235,8 +235,206 @@ function testcase.close()
     assert.is_nil(err)
     assert.is_true(ok)
 
-    -- test that read method return error if reader is closed
+    -- test that read methods return error if reader is closed
     ok, err = r:read()
     assert.match(err, 'EBADF')
     assert.is_nil(ok)
+
+    local data
+    data, err = r:readn(10)
+    assert.is_nil(data)
+    assert.match(err, 'EBADF')
+
+    data, err = r:readall()
+    assert.is_nil(data)
+    assert.match(err, 'EBADF')
+
+    data, err = r:readline()
+    assert.is_nil(data)
+    assert.match(err, 'EBADF')
 end
+
+function testcase.readn_with_remaining_buffer()
+    local f = assert(io.tmpfile())
+    local r = assert(reader.new(f))
+
+    -- Write data and create a reader with data already in buffer
+    f:write('hello world')
+    f:seek('set')
+
+    -- Read partial data to leave some in buffer
+    local data = r:readn(5)
+    assert.equal(data, 'hello')
+
+    -- Close the file to trigger EOF path
+    f:close()
+
+    -- Try to read more than remaining - should return what's left in buffer
+    local err
+    data, err = r:readn(20)
+    assert.equal(data, ' world')
+    assert.is_nil(err)
+end
+
+function testcase.readall_with_buffer()
+    local f = assert(io.tmpfile())
+    local r = assert(reader.new(f))
+
+    -- Create some buffer content
+    f:write('buffered')
+    f:seek('set')
+
+    -- Read partial to leave buffer
+    local partial = r:readn(3)
+    assert.equal(partial, 'buf')
+
+    -- Read all remaining
+    local data, err = r:readall()
+    assert.equal(data, 'fered')
+    assert.is_nil(err)
+end
+
+function testcase.readline_with_remaining_buffer()
+    local f = assert(io.tmpfile())
+    local r = assert(reader.new(f))
+
+    -- Write data without newline and close to test buffer-only path
+    f:write('remaining data')
+    f:seek('set')
+
+    -- Read partial to leave buffer
+    local partial = r:readn(5)
+    assert.equal(partial, 'remai')
+
+    -- Close file to force buffer-only reading
+    f:close()
+
+    -- readline should return remaining buffer
+    local data, err = r:readline()
+    assert.equal(data, 'ning data')
+    assert.is_nil(err)
+end
+
+function testcase.readline_with_delimiter()
+    local f = assert(io.tmpfile())
+    local r = assert(reader.new(f))
+    f:write('line1\r\nline2\nline3')
+    f:seek('set')
+
+    -- test readline with delimiter (with_delimiter=true)
+    local line = r:readline(true)
+    assert.equal(line, 'line1\r\n')
+
+    -- test readline without delimiter (default)
+    line = r:readline()
+    assert.equal(line, 'line2')
+
+    -- test readline with 'L' format (with delimiter)
+    line = r:read('L')
+    assert.equal(line, 'line3')
+end
+
+function testcase.readn_large_data()
+    local f = assert(io.tmpfile())
+    local r = assert(reader.new(f))
+
+    -- Write large data to test multiple reads
+    local large_data = string.rep('x', 10000)
+    f:write(large_data)
+    f:seek('set')
+
+    -- Read all data in chunks
+    local data, err = r:readn(#large_data)
+    assert.equal(data, large_data)
+    assert.is_nil(err)
+end
+
+function testcase.readall_empty_file()
+    local f = assert(io.tmpfile())
+    local r = assert(reader.new(f))
+
+    -- Don't write anything, create empty file
+    f:seek('set')
+    f:close()
+
+    -- readall on empty file should return nil, nil, nil (EOF)
+    local data, err, timeout = r:readall()
+    assert.is_nil(data)
+    assert.is_nil(err)
+    assert.is_nil(timeout)
+end
+
+function testcase.buffer_handling_unified()
+    local f = assert(io.tmpfile())
+    local r = assert(reader.new(f))
+
+    -- Test readn with buffer and EOF
+    f:write('test data')
+    f:seek('set')
+    r:readn(4) -- 'test'
+    f:close()
+    local data = r:readn(10)
+    assert.equal(data, ' data')
+
+    -- Test readall with buffer
+    f = assert(io.tmpfile())
+    r = assert(reader.new(f))
+    f:write('remaining data')
+    f:seek('set')
+    r:readn(5) -- 'remain'
+    f:close()
+    data = r:readall()
+    assert.equal(data, 'ning data')
+
+    -- Test lines with buffer
+    f = assert(io.tmpfile())
+    r = assert(reader.new(f))
+    f:write('final line')
+    f:seek('set')
+    r:readn(3) -- 'fin'
+    f:close()
+    local iter = r:lines()
+    local line = iter()
+    assert.equal(line, 'al line')
+    assert.is_nil(iter())
+end
+
+function testcase.read_nonblocking_with_retry()
+    local pr, pw, perr = pipe(true)
+    assert(perr == nil, perr)
+
+    -- Create reader with short timeout to trigger wait_readable
+    local r = assert(reader.new(pr:fd(), 0.1))
+
+    -- Start reading from empty pipe (will block and trigger wait_readable)
+    local data, err, timeout = r:read(10)
+
+    -- Should timeout since no data is available
+    assert.is_nil(data)
+    assert.is_nil(err)
+    assert.is_true(timeout)
+
+    pr:close()
+    pw:close()
+end
+
+function testcase.readn_after_wait_success()
+    local pr, pw, perr = pipe(true)
+    assert(perr == nil, perr)
+
+    -- Create reader with timeout
+    local r = assert(reader.new(pr:fd(), 2))
+
+    -- Write data to pipe
+    pw:write('hello world')
+    pw:close()
+
+    -- Read data - this may trigger wait_readable then succeed
+    local data, err, timeout = r:readn(11)
+    assert.equal(data, 'hello world')
+    assert.is_nil(err)
+    assert.is_nil(timeout)
+
+    pr:close()
+end
+

@@ -72,7 +72,7 @@ function Reader:close()
     local f = self.file
     if f then
         self.file = nil
-        self.fd = -self.fd
+        self.fd = self.fd == 0 and -1 or -self.fd
         return f:close()
     end
     return true
@@ -97,6 +97,115 @@ local function read(fd, count, sec)
     return data, err
 end
 
+--- readn
+--- @param n integer
+--- @return string? data
+--- @return any err
+--- @return boolean? timeout
+function Reader:readn(n)
+    assert(type(n) == 'number', 'n must be integer')
+    if n < 0 then
+        error('invalid argument #1 (negative number)')
+    elseif self.fd < 0 then
+        return nil, EBADF:new('reader is closed')
+    end
+
+    -- read n bytes from the file
+    if n == 0 then
+        return nil
+    end
+
+    local buf = self.buf
+    local len = #buf
+    if len < n then
+        local data, err, timeout = read(self.fd, n - len, self.waitsec)
+        if not data then
+            if err == nil and timeout == nil and len > 0 then
+                -- return the remaining buffer
+                self.buf = ''
+                return buf
+            end
+            return nil, err, timeout
+        end
+        -- append data to the buffer
+        buf = buf .. data
+    end
+
+    -- return the specified bytes from the buffer
+    self.buf = sub(buf, n + 1)
+    return sub(buf, 1, n)
+end
+
+--- readall
+--- @return string? data
+--- @return any err
+--- @return boolean? timeout
+function Reader:readall()
+    if self.fd < 0 then
+        return nil, EBADF:new('reader is closed')
+    end
+
+    local buf = self.buf
+    self.buf = ''
+
+    -- read all data from the file
+    local data, err, timeout = read(self.fd, nil, self.waitsec)
+    if err then
+        return nil, err
+    elseif data then
+        -- append data to the buffer
+        return buf .. data
+    elseif #buf > 0 then
+        return buf
+    end
+    return nil, nil, timeout
+end
+
+--- readline
+--- @param with_newline boolean?
+--- @return string? data
+--- @return any err
+--- @return boolean? timeout
+function Reader:readline(with_newline)
+    assert(type(with_newline) == 'boolean' or with_newline == nil,
+           'with_newline must be boolean or nil')
+    if self.fd < 0 then
+        return nil, EBADF:new('reader is closed')
+    end
+
+    local buf = self.buf
+    local head, tail = find(buf, '\r?\n', 1)
+    while not head do
+        -- need to read more data
+        local data, err, timeout = read(self.fd, nil, self.waitsec)
+        if not data then
+            if err == nil and timeout == nil and #buf > 0 then
+                -- return the remaining buffer
+                self.buf = ''
+                return buf
+            end
+            return nil, err, timeout
+        end
+        buf = buf .. data
+        self.buf = buf
+
+        -- find the newline again
+        head, tail = find(buf, '\r?\n', 1)
+    end
+
+    if not with_newline then
+        -- line without newline
+        local line = sub(buf, 1, head - 1)
+        self.buf = sub(buf, tail + 1)
+        return line
+    end
+
+    -- line with newline
+    local line = sub(buf, 1, tail)
+    self.buf = sub(buf, tail + 1)
+    return line
+end
+
 --- read
 --- @param fmt string|integer?
 --- @return string? data
@@ -112,28 +221,7 @@ function Reader:read(fmt)
 
     local t = type(fmt)
     if t == 'number' then
-        -- read n bytes from the file
-        local n = fmt
-        if n < 0 then
-            error('invalid argument #1 (negative number)')
-        elseif n == 0 then
-            return nil
-        end
-
-        local buf = self.buf
-        local len = #buf
-        if len < n then
-            local data, err, timeout = read(self.fd, n - len, self.waitsec)
-            if not data then
-                return nil, err, timeout
-            end
-            -- append data to the buffer
-            buf = buf .. data
-        end
-
-        -- return the specified bytes from the buffer
-        self.buf = sub(buf, n + 1)
-        return sub(buf, 1, n)
+        return self:readn(fmt)
     end
 
     -- check the format
@@ -146,42 +234,11 @@ function Reader:read(fmt)
     end
 
     if spec == 'a' then
-        local buf = self.buf
-        if #buf > 0 then
-            -- return all data from the buffer
-            self.buf = ''
-            return buf
-        end
-        -- read all data from the file
-        return read(self.fd, nil, self.waitsec)
+        return self:readall()
     end
 
-    local buf = self.buf
-    local head, tail = find(buf, '\r?\n', 1)
-    while not head do
-        -- need to read more data
-        local data, err, timeout = read(self.fd, nil, self.waitsec)
-        if not data then
-            return nil, err, timeout
-        end
-        buf = buf .. data
-        self.buf = buf
-
-        -- find the delimiter
-        head, tail = find(buf, '\r?\n', 1)
-    end
-
-    if spec == 'l' then
-        -- line without delimiter
-        local line = sub(buf, 1, head - 1)
-        self.buf = sub(buf, tail + 1)
-        return line
-    end
-
-    -- line with delimiter
-    local line = sub(buf, 1, tail)
-    self.buf = sub(buf, tail + 1)
-    return line
+    -- read line
+    return self:readline(spec == 'L')
 end
 
 --- lines
