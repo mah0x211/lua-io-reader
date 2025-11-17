@@ -154,7 +154,15 @@ If omitted, the default is `*l` (read one line without the newline).
 
 ## iter = reader:lines()
 
-returns an iterator that reads a line from the reader.
+returns an iterator that reads a line from the reader. this function repeatedly calls `reader:read('*l')` until the end of the file is reached.
+
+**NOTE**
+
+- When the end of the file is reached, if there is remaining data in the internal buffer, it will be returned as the last line.
+- If an error occurs during reading, it raises an error.
+- If timeout occurs during reading, it returns `nil`.
+
+this iterator cannot handle errors and timeouts during reading. so it is typically used for reading the text files.
 
 **Returns**
 
