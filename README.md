@@ -68,6 +68,15 @@ print(dump({
 ```
 
 
+## n = reader:size()
+
+get the size of internal buffer.
+
+**Returns**
+
+- `n:integer`: size of internal buffer in bytes.
+
+
 ## fd = reader:getfd()
 
 get the file descriptor of the reader. if the reader is closed, returns negative value.
