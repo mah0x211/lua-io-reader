@@ -1,7 +1,10 @@
 require('luacov')
 local testcase = require('testcase')
+local fork = require('testcase.fork')
+local sleep = require('testcase.timer').sleep
 local assert = require('assert')
 local fileno = require('io.fileno')
+local io_close = require('io.close')
 local reader = require('io.reader')
 local pipe = require('os.pipe')
 local gettime = require('time.clock').gettime
@@ -469,6 +472,147 @@ function testcase.readn_after_wait_success()
     assert.is_nil(err)
     assert.is_nil(timeout)
 
+    pr:close()
+end
+
+-- Regression: io.read may return (data, nil, true) on EAGAIN with partial
+-- bytes already accumulated. readn must not drop those bytes; on timeout it
+-- should keep them in the internal buffer for a subsequent read.
+function testcase.readn_partial_with_pending_writer()
+    local pr, pw, perr = pipe(true)
+    assert(perr == nil, perr)
+
+    local r = assert(reader.new(pr:fd(), 0.1))
+    pw:write('hello')
+
+    -- writer is still open; only 5 bytes available but we ask for 10.
+    -- io.read returns partial data + again=true; do_read returns the partial
+    -- bytes immediately (no again flag), so readn returns them as-is.
+    local data, err, timeout = r:readn(10)
+    assert.equal(data, 'hello')
+    assert.is_nil(err)
+    assert.is_nil(timeout)
+
+    -- next readn gets the remaining bytes
+    pw:write('world')
+    pw:close()
+    data, err, timeout = r:readn(5)
+    assert.equal(data, 'world')
+    assert.is_nil(err)
+    assert.is_nil(timeout)
+
+    pr:close()
+end
+
+-- Regression: readall on a non-blocking pipe must surface partial bytes that
+-- io.read returned together with again=true, instead of discarding them when
+-- the subsequent wait_readable times out.
+function testcase.readall_partial_with_pending_writer()
+    local pr, pw, perr = pipe(true)
+    assert(perr == nil, perr)
+
+    local r = assert(reader.new(pr:fd(), 0.1))
+    pw:write('hello')
+
+    -- writer is still open; readall reads what is available, waits, times out
+    -- and must return the bytes already read instead of dropping them.
+    local data, err = r:readall()
+    assert.equal(data, 'hello')
+    assert.is_nil(err)
+
+    pr:close()
+    pw:close()
+end
+
+-- Regression: readline must keep partial bytes buffered when the line has not
+-- terminated yet and the underlying read times out.
+function testcase.readline_partial_with_pending_writer()
+    local pr, pw, perr = pipe(true)
+    assert(perr == nil, perr)
+
+    local r = assert(reader.new(pr:fd(), 0.1))
+    pw:write('partial')
+
+    local data, err, timeout = r:readline()
+    assert.is_nil(data)
+    assert.is_nil(err)
+    assert.is_true(timeout)
+    assert.equal(r:size(), 7)
+
+    -- after the writer completes the line, the buffered prefix must be reused
+    pw:write(' line\n')
+    pw:close()
+    data, err, timeout = r:readline()
+    assert.equal(data, 'partial line')
+    assert.is_nil(err)
+    assert.is_nil(timeout)
+
+    pr:close()
+end
+
+function testcase.readn_eof_with_buffered_data()
+    local f = assert(io.tmpfile())
+    local r = assert(reader.new(f))
+    f:write('hello\nworld')
+    f:seek('set')
+
+    -- readline reads 'hello\nworld' from fd, returns 'hello', buffers 'world'
+    -- fd is now at EOF
+    local line = r:readline()
+    assert.equal(line, 'hello')
+
+    -- readn: buf='world', n=100; do_read returns EOF (nil,nil,nil)
+    -- with len=5>0, err=nil, timeout=nil -> returns buffered 'world'
+    local data, err = r:readn(100)
+    assert.equal(data, 'world')
+    assert.is_nil(err)
+
+    f:close()
+end
+
+function testcase.readall_error_on_bad_fd()
+    local f = assert(io.tmpfile())
+    f:write('hello')
+    f:seek('set')
+    local r = assert(reader.new(f))
+
+    -- close the reader's internal fd out-of-band so do_read gets EBADF
+    assert(io_close(r:getfd()))
+
+    -- readall should propagate the error
+    local data, err = r:readall()
+    assert.is_nil(data)
+    assert.match(err, 'EBADF')
+
+    f:close()
+end
+
+function testcase.do_read_success_after_wait_readable()
+    local pr, pw, perr = pipe(true)
+    assert(perr == nil, perr)
+
+    local r = assert(reader.new(pr:fd(), 2.0))
+
+    -- child writes data after a short delay so parent's first io.read hits EAGAIN
+    local p = assert(fork())
+    if p:is_child() then
+        sleep(0.05)
+        assert(pw:write('hello world'))
+        assert(pw:close())
+        assert(pr:close())
+        return
+    end
+
+    -- parent: close write end so EOF is signaled after child writes
+    pw:close()
+    -- do_read will hit EAGAIN on first read, wait_readable succeeds, retry read succeeds
+    local data, err, timeout = r:readn(11)
+    assert.equal(data, 'hello world')
+    assert.is_nil(err)
+    assert.is_nil(timeout)
+
+    local res = assert(p:wait())
+    assert.equal(res.exit, 0)
     pr:close()
 end
 
