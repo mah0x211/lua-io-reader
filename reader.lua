@@ -32,6 +32,17 @@ local wait_readable = require('gpoll').wait_readable
 local EINVAL = require('errno').EINVAL
 local EBADF = require('errno').EBADF
 
+local function normalize_timeout(sec)
+    if sec ~= nil and sec < 0 then
+        return nil
+    end
+    return sec
+end
+
+local function assert_timeout(sec)
+    assert(sec == nil or type(sec) == 'number', 'sec must be number or nil')
+end
+
 --- @class io.reader
 --- @field private fd integer
 --- @field private file? file*
@@ -48,7 +59,7 @@ function Reader:init(fd, f, sec)
     self.fd = fd
     self.file = f
     self.buf = ''
-    self.waitsec = sec
+    self.waitsec = normalize_timeout(sec)
     return self
 end
 
@@ -67,8 +78,8 @@ end
 --- set_timeout
 --- @param sec? number
 function Reader:set_timeout(sec)
-    assert(sec == nil or type(sec) == 'number', 'sec must be number or nil')
-    self.waitsec = sec
+    assert_timeout(sec)
+    self.waitsec = normalize_timeout(sec)
 end
 
 --- close
@@ -290,8 +301,8 @@ local function new(file, sec)
         return nil, err
     end
 
-    assert(sec == nil or type(sec) == 'number', 'sec must be number or nil')
-    return Reader(fileno(f), f, sec)
+    assert_timeout(sec)
+    return Reader(fileno(f), f, normalize_timeout(sec))
 end
 
 return {

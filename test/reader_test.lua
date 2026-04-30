@@ -644,3 +644,37 @@ function testcase.size()
     assert.equal(#data, #content)
 end
 
+function testcase.read_negative_timeout_waits_forever()
+    -- sec=-1 (and set_timeout(-1)) must be treated as wait-forever,
+    -- matching the README contract ("if nil or <0, wait forever").
+    -- A buggy implementation that passes -1 directly to wait_readable
+    -- may behave unexpectedly.
+    local pr, pw, perr = pipe(true)
+    assert(perr == nil, perr)
+
+    local r = assert(reader.new(pr:fd(), -1))
+
+    local p = assert(fork())
+    if p:is_child() then
+        sleep(0.1)
+        assert(pw:write('hello\n'))
+        assert(pw:close())
+        assert(pr:close())
+        return
+    end
+
+    pw:close()
+    local t = gettime()
+    local data, err, timeout = r:readline()
+    t = gettime() - t
+
+    assert.equal(data, 'hello')
+    assert.is_nil(err)
+    assert.is_nil(timeout)
+    assert.greater(t, 0.09)
+
+    local res = assert(p:wait())
+    assert.equal(res.exit, 0)
+    pr:close()
+end
+
