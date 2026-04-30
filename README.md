@@ -29,7 +29,7 @@ this function uses the `dup` system call internally to duplicate a file descript
 **Parameters**
 
 - `f:file*|string|integer`: file, filename or file descriptor.
-- `sec:number`: timeout seconds. if `nil` or `<0`, wait forever.
+- `sec:number`: timeout seconds for a single read call. if `nil` or `<0`, wait forever.
 
 **Returns**
 
@@ -92,7 +92,7 @@ set the timeout seconds.
 
 **Parameters**
 
-- `sec:number`: timeout seconds. if `nil` or `<0`, wait forever.
+- `sec:number`: timeout seconds for a single read call. if `nil` or `<0`, wait forever.
 
 
 ## ok, err = reader:close()
