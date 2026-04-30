@@ -26,7 +26,7 @@ local type = type
 local isfile = require('io.isfile')
 local fopen = require('io.fopen')
 local fileno = require('io.fileno')
-local readn = require('io.readn')
+local read = require('io.read')
 local wait_readable = require('gpoll').wait_readable
 -- constants
 local EINVAL = require('errno').EINVAL
@@ -84,22 +84,29 @@ function Reader:close()
     return true
 end
 
---- read
+--- do_read
 --- @param fd integer
---- @param count integer
+--- @param count integer?
 --- @param sec number?
 --- @return string? data
 --- @return any err
 --- @return boolean? timeout
-local function read(fd, count, sec)
-    local data, err, again = readn(fd, count)
-    if again then
-        fd, err, again = wait_readable(fd, sec)
-        if not fd then
-            return nil, err, again
-        end
-        return readn(fd, count)
+local function do_read(fd, count, sec)
+    local data, err, again = read(fd, count)
+    if data or not again then
+        -- success, EOF, hard error or partial data with again=true.
+        -- callers loop until they have enough; the again flag is intentionally
+        -- dropped because partial data already advanced the fd position and
+        -- must be consumed before any further wait_readable/read attempt.
+        return data, err
     end
+
+    -- no data and EAGAIN/EWOULDBLOCK/EINTR: wait then retry once
+    local ok, werr, wtimeout = wait_readable(fd, sec)
+    if not ok then
+        return nil, werr, wtimeout
+    end
+    data, err = read(fd, count)
     return data, err
 end
 
@@ -124,20 +131,18 @@ function Reader:readn(n)
     local buf = self.buf
     local len = #buf
     if len < n then
-        local data, err, timeout = read(self.fd, n - len, self.waitsec)
+        local data, err, timeout = do_read(self.fd, n - len, self.waitsec)
         if not data then
             if err == nil and timeout == nil and len > 0 then
-                -- return the remaining buffer
+                -- EOF with buffered bytes: return what we have
                 self.buf = ''
                 return buf
             end
             return nil, err, timeout
         end
-        -- append data to the buffer
         buf = buf .. data
     end
 
-    -- return the specified bytes from the buffer
     self.buf = sub(buf, n + 1)
     return sub(buf, 1, n)
 end
@@ -155,7 +160,7 @@ function Reader:readall()
     self.buf = ''
 
     -- read all data from the file
-    local data, err, timeout = read(self.fd, nil, self.waitsec)
+    local data, err, timeout = do_read(self.fd, nil, self.waitsec)
     if err then
         return nil, err
     elseif data then
@@ -183,17 +188,18 @@ function Reader:readline(with_newline)
     local head, tail = find(buf, '\r?\n', 1)
     while not head do
         -- need to read more data
-        local data, err, timeout = read(self.fd, nil, self.waitsec)
+        local data, err, timeout = do_read(self.fd, nil, self.waitsec)
         if not data then
             if err == nil and timeout == nil and #buf > 0 then
-                -- return the remaining buffer
+                -- EOF: return the remaining buffer as the last line
                 self.buf = ''
                 return buf
             end
+            -- timeout or hard error: preserve buffered bytes for a later retry
+            self.buf = buf
             return nil, err, timeout
         end
         buf = buf .. data
-        self.buf = buf
 
         -- find the newline again
         head, tail = find(buf, '\r?\n', 1)

@@ -16,7 +16,7 @@ dependencies = {
     "io-isfile >= 0.1.0",
     "io-fopen >= 0.1.3",
     "io-fileno >= 0.1.0",
-    "io-readn >= 0.1.0",
+    "io-read >= 0.3.0",
     "metamodule >= 0.5.0",
 }
 build = {

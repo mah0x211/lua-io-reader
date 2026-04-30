@@ -54,6 +54,7 @@ jobs:
         luarocks install assert
         luarocks install os-pipe
         luarocks install time-clock
+        luarocks install io-close
     -
       name: Install
       run: |
