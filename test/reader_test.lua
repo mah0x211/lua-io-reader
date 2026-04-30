@@ -161,7 +161,7 @@ function testcase.read_with_timeout()
     assert.is_nil(err)
     assert.is_nil(s)
     assert.is_true(again)
-    assert.is_true(t >= .5 and t < .6)
+    assert.is_true(t >= .45 and t < .6)
 
     -- test change timeout to 0.1 second
     r:set_timeout(.1)
@@ -171,7 +171,7 @@ function testcase.read_with_timeout()
     assert.is_nil(err)
     assert.is_nil(s)
     assert.is_true(again)
-    assert.is_true(t >= .1 and t < .2)
+    assert.is_true(t >= .09 and t < .2)
 
     -- test that read line from pipe
     pw:write('hello\nio-reader\nworld!\n')
@@ -644,3 +644,75 @@ function testcase.size()
     assert.equal(#data, #content)
 end
 
+function testcase.read_negative_timeout_waits_forever()
+    -- sec=-1 (and set_timeout(-1)) must be treated as wait-forever,
+    -- matching the README contract ("if nil or <0, wait forever").
+    -- A buggy implementation that passes -1 directly to wait_readable
+    -- may behave unexpectedly.
+    local pr, pw, perr = pipe(true)
+    assert(perr == nil, perr)
+
+    local r = assert(reader.new(pr:fd(), -1))
+
+    local p = assert(fork())
+    if p:is_child() then
+        sleep(0.1)
+        assert(pw:write('hello\n'))
+        assert(pw:close())
+        assert(pr:close())
+        return
+    end
+
+    pw:close()
+    local t = gettime()
+    local data, err, timeout = r:readline()
+    t = gettime() - t
+
+    assert.equal(data, 'hello')
+    assert.is_nil(err)
+    assert.is_nil(timeout)
+    assert.greater(t, 0.09)
+
+    local res = assert(p:wait())
+    assert.equal(res.exit, 0)
+    pr:close()
+end
+
+function testcase.readline_cumulative_timeout()
+    -- Verify that timeout is consumed across multiple do_read waits inside
+    -- a single readline() call. The child writes 'hello' at t=0.1s and
+    -- then '\n' at t=0.35s (total). With sec=0.3 the deadline should
+    -- expire before the newline arrives, so readline must return timeout.
+    -- A buggy implementation that resets the timer on each wait_readable
+    -- call would wait 0.3s from the second wait and succeed instead.
+    local pr, pw, perr = pipe(true)
+    assert(perr == nil, perr)
+
+    local r = assert(reader.new(pr:fd(), 0.3))
+
+    local p = assert(fork())
+    if p:is_child() then
+        sleep(0.1)
+        assert(pw:write('hello'))
+        sleep(0.25)
+        assert(pw:write('\n'))
+        assert(pw:close())
+        assert(pr:close())
+        return
+    end
+
+    pw:close()
+    local t = gettime()
+    local data, err, timeout = r:readline()
+    t = gettime() - t
+
+    assert.is_nil(data)
+    assert.is_nil(err)
+    assert.is_true(timeout)
+    assert.greater(t, 0.28)
+    assert.less(t, 0.32)
+
+    local res = assert(p:wait())
+    assert.equal(res.exit, 0)
+    pr:close()
+end

@@ -28,9 +28,21 @@ local fopen = require('io.fopen')
 local fileno = require('io.fileno')
 local read = require('io.read')
 local wait_readable = require('gpoll').wait_readable
+local new_deadline = require('time.clock.deadline').new
 -- constants
 local EINVAL = require('errno').EINVAL
 local EBADF = require('errno').EBADF
+
+local function normalize_timeout(sec)
+    if sec ~= nil and sec < 0 then
+        return nil
+    end
+    return sec
+end
+
+local function assert_timeout(sec)
+    assert(sec == nil or type(sec) == 'number', 'sec must be number or nil')
+end
 
 --- @class io.reader
 --- @field private fd integer
@@ -48,7 +60,7 @@ function Reader:init(fd, f, sec)
     self.fd = fd
     self.file = f
     self.buf = ''
-    self.waitsec = sec
+    self.waitsec = normalize_timeout(sec)
     return self
 end
 
@@ -67,8 +79,8 @@ end
 --- set_timeout
 --- @param sec? number
 function Reader:set_timeout(sec)
-    assert(sec == nil or type(sec) == 'number', 'sec must be number or nil')
-    self.waitsec = sec
+    assert_timeout(sec)
+    self.waitsec = normalize_timeout(sec)
 end
 
 --- close
@@ -87,11 +99,11 @@ end
 --- do_read
 --- @param fd integer
 --- @param count integer?
---- @param sec number?
+--- @param deadline table?
 --- @return string? data
 --- @return any err
 --- @return boolean? timeout
-local function do_read(fd, count, sec)
+local function do_read(fd, count, deadline)
     local data, err, again = read(fd, count)
     if data or not again then
         -- success, EOF, hard error or partial data with again=true.
@@ -101,7 +113,14 @@ local function do_read(fd, count, sec)
         return data, err
     end
 
-    -- no data and EAGAIN/EWOULDBLOCK/EINTR: wait then retry once
+    -- no data and EAGAIN/EWOULDBLOCK/EINTR: check remaining budget then wait
+    local sec
+    if deadline then
+        sec = deadline:remain()
+        if sec <= 0 then
+            return nil, nil, true
+        end
+    end
     local ok, werr, wtimeout = wait_readable(fd, sec)
     if not ok then
         return nil, werr, wtimeout
@@ -128,10 +147,11 @@ function Reader:readn(n)
         return nil
     end
 
+    local deadline = self.waitsec and new_deadline(self.waitsec)
     local buf = self.buf
     local len = #buf
     if len < n then
-        local data, err, timeout = do_read(self.fd, n - len, self.waitsec)
+        local data, err, timeout = do_read(self.fd, n - len, deadline)
         if not data then
             if err == nil and timeout == nil and len > 0 then
                 -- EOF with buffered bytes: return what we have
@@ -156,11 +176,12 @@ function Reader:readall()
         return nil, EBADF:new('reader is closed')
     end
 
+    local deadline = self.waitsec and new_deadline(self.waitsec)
     local buf = self.buf
     self.buf = ''
 
     -- read all data from the file
-    local data, err, timeout = do_read(self.fd, nil, self.waitsec)
+    local data, err, timeout = do_read(self.fd, nil, deadline)
     if err then
         return nil, err
     elseif data then
@@ -184,11 +205,12 @@ function Reader:readline(with_newline)
         return nil, EBADF:new('reader is closed')
     end
 
+    local deadline = self.waitsec and new_deadline(self.waitsec)
     local buf = self.buf
     local head, tail = find(buf, '\r?\n', 1)
     while not head do
         -- need to read more data
-        local data, err, timeout = do_read(self.fd, nil, self.waitsec)
+        local data, err, timeout = do_read(self.fd, nil, deadline)
         if not data then
             if err == nil and timeout == nil and #buf > 0 then
                 -- EOF: return the remaining buffer as the last line
@@ -290,8 +312,8 @@ local function new(file, sec)
         return nil, err
     end
 
-    assert(sec == nil or type(sec) == 'number', 'sec must be number or nil')
-    return Reader(fileno(f), f, sec)
+    assert_timeout(sec)
+    return Reader(fileno(f), f, normalize_timeout(sec))
 end
 
 return {
