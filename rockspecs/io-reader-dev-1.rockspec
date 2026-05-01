@@ -18,6 +18,7 @@ dependencies = {
     "io-fileno >= 0.1.0",
     "io-read >= 0.3.0",
     "metamodule >= 0.5.0",
+    "time-clock >= 0.5.0",
 }
 build = {
     type = "builtin",
