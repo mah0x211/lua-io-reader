@@ -491,7 +491,7 @@ function testcase.readn_partial_with_pending_writer()
     local data, err, timeout = r:readn(10)
     assert.equal(data, 'hello')
     assert.is_nil(err)
-    assert.is_nil(timeout)
+    assert.is_true(timeout)
 
     -- next readn gets the remaining bytes
     pw:write('world')
@@ -548,6 +548,21 @@ function testcase.readline_partial_with_pending_writer()
     assert.is_nil(timeout)
 
     pr:close()
+end
+
+-- sec=0 creates a deadline that is immediately done (new_deadline(0) sets
+-- d->done=true), so do_read's while loop is never entered and the post-loop
+-- `return data, nil, true` fires on the very first call.
+function testcase.readn_timeout_when_deadline_already_expired()
+    local pr, pw, perr = pipe(true)
+    assert(perr == nil, perr)
+    local r = assert(reader.new(pr:fd(), 0))
+    local data, err, timeout = r:readn(1)
+    assert.is_nil(data)
+    assert.is_nil(err)
+    assert.is_true(timeout)
+    pr:close()
+    pw:close()
 end
 
 function testcase.readn_eof_with_buffered_data()

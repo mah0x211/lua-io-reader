@@ -104,29 +104,48 @@ end
 --- @return any err
 --- @return boolean? timeout
 local function do_read(fd, count, deadline)
-    local data, err, again = read(fd, count)
-    if data or not again then
-        -- success, EOF, hard error or partial data with again=true.
-        -- callers loop until they have enough; the again flag is intentionally
-        -- dropped because partial data already advanced the fd position and
-        -- must be consumed before any further wait_readable/read attempt.
-        return data, err
-    end
+    local timeout = deadline and deadline:is_done()
+    local remain = count
+    local data
+    while not timeout do
+        local chunk, err, again = read(fd, remain)
+        if err then
+            return data, err
+        elseif chunk then
+            if not remain then
+                -- read once if count is not specified
+                return chunk
+            end
 
-    -- no data and EAGAIN/EWOULDBLOCK/EINTR: check remaining budget then wait
-    local sec
-    if deadline then
-        sec = deadline:remain()
-        if sec <= 0 then
-            return nil, nil, true
+            -- append chunk to the data
+            data = (data or '') .. chunk
+            if not again then
+                -- read enough data
+                return data
+            end
+            -- update remaining bytes to read
+            remain = remain - #chunk
+        elseif not again then
+            -- EOF: return what we have
+            return data
+        end
+
+        -- no data and EAGAIN/EWOULDBLOCK/EINTR: check remaining budget then wait
+        local sec = deadline and deadline:remain() or nil
+        if sec and sec <= 0 then
+            -- timeout: return what we have
+            return data, nil, true
+        end
+
+        -- wait until the file is readable or timeout
+        local ok
+        ok, err, timeout = wait_readable(fd, sec)
+        if not ok then
+            return data, err, timeout
         end
     end
-    local ok, werr, wtimeout = wait_readable(fd, sec)
-    if not ok then
-        return nil, werr, wtimeout
-    end
-    data, err = read(fd, count)
-    return data, err
+
+    return data, nil, true
 end
 
 --- readn
@@ -150,8 +169,10 @@ function Reader:readn(n)
     local deadline = self.waitsec and new_deadline(self.waitsec)
     local buf = self.buf
     local len = #buf
+    local timeout
     if len < n then
-        local data, err, timeout = do_read(self.fd, n - len, deadline)
+        local data, err
+        data, err, timeout = do_read(self.fd, n - len, deadline)
         if not data then
             if err == nil and timeout == nil and len > 0 then
                 -- EOF with buffered bytes: return what we have
@@ -164,7 +185,7 @@ function Reader:readn(n)
     end
 
     self.buf = sub(buf, n + 1)
-    return sub(buf, 1, n)
+    return sub(buf, 1, n), nil, timeout
 end
 
 --- readall
