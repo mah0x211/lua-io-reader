@@ -116,7 +116,7 @@ read `n` bytes from the reader.
 
 **Returns**
 
-- `s:string`: read data.
+- `s:string`: read data. if `timeout` is `true`, `s` may contain fewer than `n` bytes (partial data received before the timeout).
 - `err:any`: error message.
 - `timeout:boolean`: `true` if timed out.
 
